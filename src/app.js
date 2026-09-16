@@ -5,8 +5,40 @@ const map=L.map('map',{preferCanvas:true,zoomControl:true,minZoom:7,maxZoom:18,w
 const base=L.tileLayer('/api/tile/{z}/{y}/{x}',{maxZoom:16,attribution:'USGS The National Map'}).addTo(map);
 const statusEl=document.getElementById('status'),sourceEl=document.getElementById('source'),readoutEl=document.getElementById('readout'),liveEl=document.getElementById('live');
 function paddedBounds(){const b=map.getBounds(),dy=(b.getNorth()-b.getSouth())*.08,dx=(b.getEast()-b.getWest())*.08;return {north:b.getNorth()+dy,south:b.getSouth()-dy,west:b.getWest()-dx,east:b.getEast()+dx}}
-async function loadRelief(){if(map.getZoom()<10){statusEl.textContent='ZOOM IN FOR SEAFLOOR';return}const b=paddedBounds();if(b.north-b.south>.32||b.east-b.west>.32){statusEl.textContent='ZOOM IN FOR DETAIL';return}if(controller)controller.abort();controller=new AbortController();const seq=++renderSeq,statusStart=performance.now();statusEl.textContent='RENDERING NOAA SEAFLOOR';try{const size=map.getSize(),q=new URLSearchParams({north:b.north.toFixed(6),south:b.south.toFixed(6),west:b.west.toFixed(6),east:b.east.toFixed(6),w:String(Math.min(1400,Math.max(700,size.x))),h:String(Math.min(1400,Math.max(700,size.y)))}),r=await fetch('/api/relief?'+q,{cache:'force-cache',signal:controller.signal});if(!r.ok){let e={};try{e=await r.json()}catch{}throw Error(e.detail||`HTTP ${r.status}`)}const blob=await r.blob();if(seq!==renderSeq)return;const url=URL.createObjectURL(blob),next=L.imageOverlay(url,[[b.south,b.west],[b.north,b.east]],{opacity:.9,interactive:false});next.once('load',()=>{if(reliefLayer){map.removeLayer(reliefLayer);const old=reliefLayer._breakstateUrl;if(old)URL.revokeObjectURL(old)}reliefLayer=next;reliefLayer._breakstateUrl=url;statusEl.textContent=`SEAFLOOR READY · ${Math.round(performance.now()-statusStart)} ms`;sourceEl.innerHTML='<b>NOAA NCEI DEM Global Mosaic</b><span>Server-rendered multidirectional ColorHillshade</span><span>Historical/surveyed or compiled baseline · survey date varies by source raster</span>';readoutEl.innerHTML='<div><label>SEAFLOOR RENDER</label><strong>CONTINUOUS SHADED RELIEF</strong><span>Terrain form is encoded with elevation tint + hillshade rather than client-side colored sample blocks.</span></div><div><label>NAVIGATION</label><strong>FREE PAN / ZOOM</strong><span>Destination selector is camera navigation only.</span></div><div><label>DEPTH INSPECT</label><strong>CLICK MAP</strong><span>Returns the NOAA/NCEI elevation sample at the clicked coordinate.</span></div>`});next.addTo(map)}catch(e){if(e.name==='AbortError')return;statusEl.textContent='SEAFLOOR SOURCE ERROR';readoutEl.innerHTML=`<div class="error"><b>SEAFLOOR UNAVAILABLE</b><span>${e.message}. No synthetic substitute rendered.</span></div>`}}
+async function loadRelief(){
+  if(map.getZoom()<10){statusEl.textContent='ZOOM IN FOR SEAFLOOR';return}
+  const b=paddedBounds();
+  if(b.north-b.south>.32||b.east-b.west>.32){statusEl.textContent='ZOOM IN FOR DETAIL';return}
+  if(controller)controller.abort();
+  controller=new AbortController();
+  const seq=++renderSeq,statusStart=performance.now();
+  statusEl.textContent='RENDERING NOAA SEAFLOOR';
+  try{
+    const size=map.getSize();
+    const q=new URLSearchParams({north:b.north.toFixed(6),south:b.south.toFixed(6),west:b.west.toFixed(6),east:b.east.toFixed(6),w:String(Math.min(1400,Math.max(700,size.x))),h:String(Math.min(1400,Math.max(700,size.y)))});
+    const r=await fetch('/api/relief?'+q,{cache:'force-cache',signal:controller.signal});
+    if(!r.ok){let detail='HTTP '+r.status;try{const payload=await r.json();detail=payload.detail||detail}catch{}throw new Error(detail)}
+    const blob=await r.blob();
+    if(seq!==renderSeq)return;
+    const url=URL.createObjectURL(blob),next=L.imageOverlay(url,[[b.south,b.west],[b.north,b.east]],{opacity:.9,interactive:false});
+    next.once('load',()=>{
+      if(reliefLayer){map.removeLayer(reliefLayer);const old=reliefLayer._breakstateUrl;if(old)URL.revokeObjectURL(old)}
+      reliefLayer=next;reliefLayer._breakstateUrl=url;
+      statusEl.textContent=`SEAFLOOR READY · ${Math.round(performance.now()-statusStart)} ms`;
+      sourceEl.innerHTML='<b>NOAA NCEI DEM Global Mosaic</b><span>Server-rendered multidirectional ColorHillshade</span><span>Historical/surveyed or compiled baseline · survey date varies by source raster</span>';
+      readoutEl.innerHTML='<div><label>SEAFLOOR RENDER</label><strong>CONTINUOUS SHADED RELIEF</strong><span>Terrain form is encoded with elevation tint + hillshade rather than client-side colored sample blocks.</span></div><div><label>NAVIGATION</label><strong>FREE PAN / ZOOM</strong><span>Destination selector is camera navigation only.</span></div><div><label>DEPTH INSPECT</label><strong>CLICK MAP</strong><span>Returns the NOAA/NCEI elevation sample at the clicked coordinate.</span></div>';
+    });
+    next.addTo(map);
+  }catch(err){
+    if(err.name==='AbortError')return;
+    statusEl.textContent='SEAFLOOR SOURCE ERROR';
+    readoutEl.innerHTML=`<div class="error"><b>SEAFLOOR UNAVAILABLE</b><span>${err.message}. No synthetic substitute rendered.</span></div>`;
+  }
+}
 function scheduleLoad(){clearTimeout(loadTimer);loadTimer=setTimeout(loadRelief,140)}
 async function inspectDepth(e){const {lat,lng}=e.latlng;try{const r=await fetch(`/api/identify?lat=${lat.toFixed(7)}&lon=${lng.toFixed(7)}`,{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.detail||'sample unavailable');const value=Number.isFinite(d.elevationM)?`${d.elevationM.toFixed(2)} m elevation${d.elevationM<0?` · ${d.depthM.toFixed(2)} m below source zero`:''}`:'No elevation returned';L.popup().setLatLng(e.latlng).setContent(`<b>${value}</b><br>NOAA/NCEI baseline<br>Raster ${d.rasterId??'unresolved'} · survey date unresolved`).openOn(map)}catch(err){L.popup().setLatLng(e.latlng).setContent(`Depth unavailable: ${err.message}`).openOn(map)}}
 async function loadLive(){try{const r=await fetch('/api/conditions',{cache:'no-store'});conditions=await r.json();liveEl.innerHTML=conditions.buoys.map(x=>`<div><b>NOAA NDBC ${x.station} · ${x.fresh?'LIVE':'STALE'}</b><strong>${x.waveHeightM!=null?(x.waveHeightM*3.28084).toFixed(1)+' ft':'wave unavailable'}${x.periodS!=null?' @ '+x.periodS+'s':''}</strong><span>${x.waveDir??'—'}° · ${x.ageMinutes??'—'} min old</span></div>`).join('')||'<span>No NDBC observations returned.</span>'}catch{conditions=null;liveEl.innerHTML='<span>Live NOAA observations unavailable.</span>'}}
-document.getElementById('beach').onchange=e=>{const b=beaches.find(x=>x[0]===e.target.value);if(b)map.flyTo([b[1],b[2]+.006],15,{duration:.8})};document.getElementById('reliefToggle').onchange=e=>{if(!reliefLayer)return;e.target.checked?reliefLayer.addTo(map):map.removeLayer(reliefLayer)};document.querySelectorAll('[data-base]').forEach(btn=>btn.onclick=()=>{document.querySelectorAll('[data-base]').forEach(x=>x.classList.remove('active'));btn.classList.add('active');btn.dataset.base==='topo'?base.addTo(map):map.removeLayer(base)});map.on('moveend zoomend',scheduleLoad);map.on('click',inspectDepth);loadLive();loadRelief();setInterval(loadLive,180000);
+document.getElementById('beach').onchange=e=>{const b=beaches.find(x=>x[0]===e.target.value);if(b)map.flyTo([b[1],b[2]+.006],15,{duration:.8})};
+document.getElementById('reliefToggle').onchange=e=>{if(!reliefLayer)return;e.target.checked?reliefLayer.addTo(map):map.removeLayer(reliefLayer)};
+document.querySelectorAll('[data-base]').forEach(btn=>btn.onclick=()=>{document.querySelectorAll('[data-base]').forEach(x=>x.classList.remove('active'));btn.classList.add('active');btn.dataset.base==='topo'?base.addTo(map):map.removeLayer(base)});
+map.on('moveend zoomend',scheduleLoad);map.on('click',inspectDepth);loadLive();loadRelief();setInterval(loadLive,180000);
