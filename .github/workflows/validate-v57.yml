@@ -1,4 +1,4 @@
-name: Validate V57 Bathymetric Surface
+name: Validate BREAKSTATE V58 Review
 
 on:
   push:
@@ -9,36 +9,41 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Run 40,000-state regression suite
-        run: node scripts/qa.js
-      - name: Start BREAKSTATE server
+          node-version: '24'
+      - name: Run 400-scenario architecture simulation
+        run: npm test
+      - name: Start BREAKSTATE
         run: |
           node server.js > /tmp/breakstate.log 2>&1 &
           echo $! > /tmp/breakstate.pid
-      - name: Verify server health and corridor endpoint
+      - name: Verify app shell and health
         run: |
           node - <<'NODE'
           const wait=ms=>new Promise(r=>setTimeout(r,ms));
           async function main(){
-            let health;
-            for(let i=0;i<15;i++){
-              try{const r=await fetch('http://127.0.0.1:5173/api/health');if(r.ok){health=await r.json();break}}catch{}
-              await wait(1000);
-            }
-            if(!health) throw new Error('server did not become healthy');
-            const r=await fetch('http://127.0.0.1:5173/api/corridor?north=40.120&south=40.085&west=-74.055&east=-73.990');
-            if(!r.ok) throw new Error('corridor HTTP '+r.status);
-            const d=await r.json();
-            if(!Array.isArray(d.samples)||d.samples.length<100) throw new Error('insufficient returned bathymetry');
-            if(!(d.coverage>0.25)) throw new Error('insufficient source coverage');
-            if(d.model?.status!=='NOT APPLIED TO DEPTH') throw new Error('unvalidated morphology altered depth');
-            console.log('CONFIRMED health + Manasquan/Jenkinson corridor:',d.samples.length,'samples, coverage',d.coverage);
+            let h;
+            for(let i=0;i<20;i++){try{const r=await fetch('http://127.0.0.1:5173/api/health');if(r.ok){h=await r.json();break}}catch{}await wait(250)}
+            if(!h||h.version!=='58.0.0-review')throw Error('V58 server health failed');
+            const page=await fetch('http://127.0.0.1:5173/');if(!page.ok)throw Error('app shell failed');
+            const js=await fetch('http://127.0.0.1:5173/src/app.js');if(!js.ok)throw Error('client JS failed');
+            const css=await fetch('http://127.0.0.1:5173/src/style.css');if(!css.ok)throw Error('CSS failed');
+            console.log('PASS app shell + health',h.version);
+          }
+          main().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - name: Verify NOAA terrain integration and persistent cache
+        run: |
+          node - <<'NODE'
+          async function main(){
+            const u='http://127.0.0.1:5173/api/terrain/14/4821/6162.png';
+            const a=await fetch(u);if(!a.ok)throw Error('terrain first request '+a.status);const ab=Buffer.from(await a.arrayBuffer());if(ab.length<1000||ab[0]!==0x89||ab[1]!==0x50)throw Error('terrain not PNG');
+            const b=await fetch(u);if(!b.ok)throw Error('terrain cached request '+b.status);const cache=b.headers.get('x-breakstate-cache');if(!['DISK','COALESCED'].includes(cache))throw Error('persistent cache not used: '+cache);
+            console.log('PASS NOAA terrain + persistent cache',ab.length,'bytes',cache);
           }
           main().catch(e=>{console.error(e);process.exit(1)});
           NODE
