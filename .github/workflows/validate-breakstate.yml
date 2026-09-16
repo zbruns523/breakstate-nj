@@ -1,0 +1,33 @@
+name: Validate BREAKSTATE
+on:
+  push:
+    branches: [breakstate-final]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Start application
+        run: |
+          node server.js > /tmp/breakstate.log 2>&1 &
+          echo $! > /tmp/breakstate.pid
+          for i in {1..20}; do
+            curl -fsS http://127.0.0.1:5173/api/health && exit 0
+            sleep 1
+          done
+          cat /tmp/breakstate.log
+          exit 1
+      - name: Verify application shell
+        run: |
+          curl -fsS http://127.0.0.1:5173/ | grep -q 'id="app"'
+          curl -fsS http://127.0.0.1:5173/src/app.js | grep -q 'Detected sandbar crests'
+      - name: Verify Bay Head baseline
+        run: |
+          curl --retry 2 --retry-delay 2 --max-time 120 -fsS 'http://127.0.0.1:5173/api/bathy?beach=Bay%20Head' -o /tmp/bathy.json
+          node -e "const d=require('/tmp/bathy.json'); if(!d.samples||d.samples.length<50||!d.source||d.surveyDate!==null) process.exit(1); console.log('baseline samples',d.samples.length,d.source)"
