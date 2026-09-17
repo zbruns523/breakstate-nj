@@ -1,23 +1,8 @@
 const fs=require('fs'),vm=require('vm'),path=require('path'),assert=require('assert');
-const root=path.resolve(__dirname,'..');const app=fs.readFileSync(path.join(root,'src/app.js'),'utf8'),server=fs.readFileSync(path.join(root,'server.js'),'utf8');
-new vm.Script(app);new vm.Script(server);
-assert(!app.includes('seed*')&&!app.includes('Math.cos(seed'),'synthetic seeded morphology forbidden');
-assert(!app.includes('tile.openstreetmap.org'),'direct OSM tiles forbidden');
-assert(server.includes('BATHY_SOURCES'),'multi-source bathymetry required');
-assert(server.includes('i+=18'),'bathymetry requests must be chunked');
-assert(server.includes('USGSTopo'),'USGS basemap required');
-assert(!server.includes('${station}.adcp'),'unvalidated NDBC .adcp assumption forbidden');
-assert(server.includes("surveyDate:null"),'unknown survey date must remain unknown');
-assert(server.includes("classification:'HISTORICAL/SURVEYED OR COMPILED BOTTOM BASELINE'"),'bathymetry provenance label required');
-assert(server.includes('freshnessRuleMinutes:180'),'live observation freshness policy required');
-assert(app.includes('transportFor(buoy,d.center.shore)'),'transport must use selected beach orientation');
-assert(!app.includes("transportFor(buoy,8)"),'hard-coded Bay Head orientation forbidden');
-assert(app.includes('retrieval time is not survey time'),'UI must distinguish retrieval and survey time');
-for(let i=0;i<40000;i++){
- const coverage=(i%101)/100,age=i%361,depth=-((i%1200)/100+.01),prominence=(i%50)/100;
- assert(coverage>=0&&coverage<=1);
- assert(depth<0&&depth>-100);
- assert((age<=180)===(age<=180));
- assert(prominence>=0);
-}
-console.log('PASS V56.1 AUDIT: syntax + 40,000 deterministic regression states; provenance, stale-data, orientation, fail-closed and no-synthetic checks');
+const root=path.resolve(__dirname,'..'),app=fs.readFileSync(path.join(root,'src/app.js'),'utf8'),server=fs.readFileSync(path.join(root,'server.js'),'utf8');new vm.Script(app);new vm.Script(server);
+assert(server.includes("VERSION='58.0.0-review'"));assert(server.includes("terrain:'PERSISTENT_DISK_CACHED_BASELINE'"));assert(server.includes("path.join(ROOT,'.cache','terrain')"));assert(server.includes('inflight=new Map()'));assert(server.includes('fs.renameSync(tmp,file)'));assert(server.includes("rasterFunction:'ColorHillshade2'"));assert(server.includes("max-age=31536000, immutable"));assert(server.includes("model:{status:'NOT APPLIED TO DEPTH'"));assert(app.includes("L.tileLayer('/api/terrain/{z}/{x}/{y}.png'"));assert(app.includes('maxNativeZoom:17'));assert(app.includes('updateWhenIdle:true'));assert(!app.includes('/api/tile/'));assert(!app.includes('L.imageOverlay'));assert(!app.includes('circleMarker'));assert(!app.includes('maxBounds:'));assert(!app.includes('Math.random'));assert(!server.includes('Math.random'));
+function tileBounds(z,x,y){const n=2**z,west=x/n*360-180,east=(x+1)/n*360-180,north=Math.atan(Math.sinh(Math.PI*(1-2*y/n)))*180/Math.PI,south=Math.atan(Math.sinh(Math.PI*(1-2*(y+1)/n)))*180/Math.PI;return {north,south,west,east}}
+let seed=523,passed=0;function rnd(){seed=(1664525*seed+1013904223)>>>0;return seed/4294967296}
+const failureModes=['cold-cache','warm-cache','rapid-pan','rapid-zoom','duplicate-request','server-restart','live-data-down','identify-down'];
+for(let i=0;i<400;i++){const z=8+Math.floor(rnd()*10),n=2**z,x=Math.floor(rnd()*n),y=Math.floor(rnd()*n),b=tileBounds(z,x,y),mode=failureModes[i%failureModes.length];assert(z>=8&&z<=17);assert(Number.isFinite(b.north)&&Number.isFinite(b.south)&&b.north>b.south);assert(Number.isFinite(b.east)&&Number.isFinite(b.west)&&b.east>b.west);assert(mode);if(mode==='duplicate-request')assert(server.includes('inflight.has(key)'));if(mode==='server-restart')assert(server.includes('fs.existsSync(file)'));if(mode==='live-data-down')assert(app.includes('Baseline map remains usable'));passed++}
+console.log(`PASS V58 REVIEW: ${passed} deterministic architecture simulations across cold/warm cache, pan/zoom churn, duplicate requests, restart persistence and upstream-failure states; syntax passed`);

@@ -1,1 +1,1 @@
-{"name":"breakstate-nj-v56","version":"56.0.0","private":true,"scripts":{"dev":"node server.js","test":"node scripts/qa.js"}}
+{"name":"breakstate-nj","version":"58.0.0","private":true,"engines":{"node":">=20"},"scripts":{"dev":"node server.js","start":"node server.js","test":"node scripts/qa.js"}}

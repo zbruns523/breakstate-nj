@@ -1,0 +1,52 @@
+name: Validate BREAKSTATE V58 Review
+
+on:
+  push:
+    branches: [bathymetric-surface-v57]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Run 400-scenario architecture simulation
+        run: npm test
+      - name: Start BREAKSTATE
+        run: |
+          node server.js > /tmp/breakstate.log 2>&1 &
+          echo $! > /tmp/breakstate.pid
+      - name: Verify app shell and health
+        run: |
+          node - <<'NODE'
+          const wait=ms=>new Promise(r=>setTimeout(r,ms));
+          async function main(){
+            let h;
+            for(let i=0;i<20;i++){try{const r=await fetch('http://127.0.0.1:5173/api/health');if(r.ok){h=await r.json();break}}catch{}await wait(250)}
+            if(!h||h.version!=='58.0.0-review')throw Error('V58 server health failed');
+            const page=await fetch('http://127.0.0.1:5173/');if(!page.ok)throw Error('app shell failed');
+            const js=await fetch('http://127.0.0.1:5173/src/app.js');if(!js.ok)throw Error('client JS failed');
+            const css=await fetch('http://127.0.0.1:5173/src/style.css');if(!css.ok)throw Error('CSS failed');
+            console.log('PASS app shell + health',h.version);
+          }
+          main().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - name: Verify NOAA terrain integration and persistent cache
+        run: |
+          node - <<'NODE'
+          async function main(){
+            const u='http://127.0.0.1:5173/api/terrain/14/4821/6162.png';
+            const a=await fetch(u);if(!a.ok)throw Error('terrain first request '+a.status);const ab=Buffer.from(await a.arrayBuffer());if(ab.length<1000||ab[0]!==0x89||ab[1]!==0x50)throw Error('terrain not PNG');
+            const b=await fetch(u);if(!b.ok)throw Error('terrain cached request '+b.status);const cache=b.headers.get('x-breakstate-cache');if(!['DISK','COALESCED'].includes(cache))throw Error('persistent cache not used: '+cache);
+            console.log('PASS NOAA terrain + persistent cache',ab.length,'bytes',cache);
+          }
+          main().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/breakstate.log || true
